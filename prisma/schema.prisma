@@ -1,0 +1,79 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "sqlite"
+  url      = env("DATABASE_URL")
+}
+
+enum InvoiceStatus {
+  PAID
+  PENDING
+  OVERDUE
+}
+
+model User {
+  id           String    @id @default(cuid())
+  email        String    @unique
+  passwordHash String
+  createdAt    DateTime  @default(now())
+  invoices     Invoice[]
+  clients      Client[]
+}
+
+model Client {
+  id        String    @id @default(cuid())
+  userId    String
+  user      User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+  name      String
+  email     String
+  address   String
+  invoices  Invoice[]
+  createdAt DateTime  @default(now())
+
+  @@unique([userId, email])
+  @@index([userId])
+}
+
+model Invoice {
+  id             String        @id @default(cuid())
+  userId         String
+  clientId       String
+  user           User          @relation(fields: [userId], references: [id], onDelete: Cascade)
+  client         Client        @relation(fields: [clientId], references: [id])
+  invoiceNumber  String
+  invoiceDate    DateTime
+  dueDate        DateTime
+  status         InvoiceStatus @default(PENDING)
+  companyName    String
+  companyLogo    String?
+  companyAddress String
+  companyEmail   String
+  companyPhone   String
+  taxId          String?
+  notes          String?
+  terms          String?
+  taxPercent     Float         @default(0)
+  discount       Float         @default(0)
+  subtotal       Float
+  total          Float
+  items          InvoiceItem[]
+  createdAt      DateTime      @default(now())
+  updatedAt      DateTime      @updatedAt
+
+  @@unique([userId, invoiceNumber])
+  @@index([userId, status])
+  @@index([clientId])
+}
+
+model InvoiceItem {
+  id          String  @id @default(cuid())
+  invoiceId   String
+  invoice     Invoice @relation(fields: [invoiceId], references: [id], onDelete: Cascade)
+  name        String
+  description String
+  quantity    Int
+  price       Float
+  total       Float
+}

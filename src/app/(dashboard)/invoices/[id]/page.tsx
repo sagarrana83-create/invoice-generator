@@ -1,23 +1,24 @@
 import { InvoiceStatus } from "@prisma/client";
 import { notFound } from "next/navigation";
-import { updateInvoiceStatusAction } from "@/app/(dashboard)/actions";
+import {
+  downloadInvoicePdfAction,
+  sendInvoiceAction,
+  updateInvoiceStatusAction,
+} from "@/app/(dashboard)/actions";
 import { requireUserId } from "@/lib/auth/user";
 import { formatCurrency } from "@/lib/invoices/calculations";
-import { prisma } from "@/lib/prisma";
+import { getOwnedInvoiceForUser } from "@/lib/invoices/invoice-data";
+
+const statusBadgeStyles: Record<InvoiceStatus, string> = {
+  draft: "bg-slate-100 text-slate-700",
+  sent: "bg-amber-100 text-amber-800",
+  paid: "bg-emerald-100 text-emerald-800",
+};
 
 export default async function InvoiceDetailsPage({ params }: { params: { id: string } }) {
   const userId = await requireUserId();
 
-  const invoice = await prisma.invoice.findFirst({
-    where: {
-      id: params.id,
-      userId,
-    },
-    include: {
-      client: true,
-      items: true,
-    },
-  });
+  const invoice = await getOwnedInvoiceForUser(userId, params.id);
 
   if (!invoice) {
     notFound();
@@ -35,24 +36,53 @@ export default async function InvoiceDetailsPage({ params }: { params: { id: str
             <p className="mt-2 text-sm text-slate-600">
               {invoice.client.name} • Due {new Intl.DateTimeFormat("en-US").format(invoice.dueDate)}
             </p>
+            <span
+              className={`mt-3 inline-flex rounded-full px-3 py-1 text-xs font-semibold uppercase tracking-wide ${statusBadgeStyles[invoice.status]}`}
+            >
+              {invoice.status}
+            </span>
           </div>
 
-          <div className="space-y-2">
-            <p className="text-sm font-medium text-slate-700">Status</p>
+          <div className="space-y-4">
             <div className="flex flex-wrap gap-2">
-              {statuses.map((status) => (
-                <form key={status} action={updateInvoiceStatusAction}>
-                  <input type="hidden" name="invoiceId" value={invoice.id} />
-                  <input type="hidden" name="status" value={status} />
-                  <button
-                    type="submit"
-                    disabled={invoice.status === status}
-                    className="rounded-lg border border-slate-300 px-3 py-1.5 text-sm capitalize text-slate-700 disabled:bg-slate-900 disabled:text-white"
-                  >
-                    {status}
-                  </button>
-                </form>
-              ))}
+              <form action={downloadInvoicePdfAction}>
+                <input type="hidden" name="invoiceId" value={invoice.id} />
+                <button
+                  type="submit"
+                  className="rounded-lg border border-slate-300 px-3 py-2 text-sm font-medium text-slate-700 hover:bg-slate-100"
+                >
+                  Download PDF
+                </button>
+              </form>
+
+              <form action={sendInvoiceAction}>
+                <input type="hidden" name="invoiceId" value={invoice.id} />
+                <button
+                  type="submit"
+                  className="rounded-lg bg-slate-900 px-3 py-2 text-sm font-medium text-white hover:bg-slate-800"
+                >
+                  Send Invoice
+                </button>
+              </form>
+            </div>
+
+            <div>
+              <p className="mb-2 text-sm font-medium text-slate-700">Set status</p>
+              <div className="flex flex-wrap gap-2">
+                {statuses.map((status) => (
+                  <form key={status} action={updateInvoiceStatusAction}>
+                    <input type="hidden" name="invoiceId" value={invoice.id} />
+                    <input type="hidden" name="status" value={status} />
+                    <button
+                      type="submit"
+                      disabled={invoice.status === status}
+                      className="rounded-lg border border-slate-300 px-3 py-1.5 text-sm capitalize text-slate-700 disabled:bg-slate-900 disabled:text-white"
+                    >
+                      {status}
+                    </button>
+                  </form>
+                ))}
+              </div>
             </div>
           </div>
         </div>

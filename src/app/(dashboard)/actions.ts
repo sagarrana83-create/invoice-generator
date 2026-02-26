@@ -4,9 +4,12 @@ import { InvoiceStatus } from "@prisma/client";
 import { revalidatePath } from "next/cache";
 import { redirect } from "next/navigation";
 import { z } from "zod";
+import { sendInvoiceEmail } from "@/lib/email/invoice-email";
 import { requireUserId } from "@/lib/auth/user";
-import { prisma } from "@/lib/prisma";
 import { calculateInvoiceTotals } from "@/lib/invoices/calculations";
+import { getOwnedInvoiceWithCompany } from "@/lib/invoices/invoice-data";
+import { generateInvoicePdfBuffer } from "@/lib/invoices/pdf";
+import { prisma } from "@/lib/prisma";
 
 const clientSchema = z.object({
   name: z.string().trim().min(2, "Client name is required.").max(120),
@@ -200,6 +203,62 @@ export async function updateInvoiceStatusAction(formData: FormData): Promise<voi
       userId,
     },
     data: { status },
+  });
+
+  revalidatePath(`/dashboard/invoices/${invoiceId}`);
+  revalidatePath("/dashboard/invoices");
+  redirect(`/dashboard/invoices/${invoiceId}`);
+}
+
+export async function downloadInvoicePdfAction(formData: FormData): Promise<void> {
+  const userId = await requireUserId();
+  const invoiceId = formData.get("invoiceId");
+
+  if (typeof invoiceId !== "string" || !invoiceId) {
+    throw new Error("Invoice id is required.");
+  }
+
+  const invoice = await prisma.invoice.findFirst({
+    where: { id: invoiceId, userId },
+    select: { id: true },
+  });
+
+  if (!invoice) {
+    throw new Error("Invoice not found.");
+  }
+
+  redirect(`/dashboard/invoices/${invoiceId}/pdf`);
+}
+
+export async function sendInvoiceAction(formData: FormData): Promise<void> {
+  const userId = await requireUserId();
+  const invoiceId = formData.get("invoiceId");
+
+  if (typeof invoiceId !== "string" || !invoiceId) {
+    throw new Error("Invoice id is required.");
+  }
+
+  const { invoice, company } = await getOwnedInvoiceWithCompany(userId, invoiceId);
+
+  if (!invoice) {
+    throw new Error("Invoice not found.");
+  }
+
+  if (!invoice.client.email) {
+    throw new Error("Client email is required before sending invoice.");
+  }
+
+  const pdfBuffer = await generateInvoicePdfBuffer(invoice, company);
+
+  await sendInvoiceEmail({
+    to: invoice.client.email,
+    invoiceNumber: invoice.invoiceNo,
+    pdfBuffer,
+  });
+
+  await prisma.invoice.update({
+    where: { id: invoice.id },
+    data: { status: InvoiceStatus.sent },
   });
 
   revalidatePath(`/dashboard/invoices/${invoiceId}`);

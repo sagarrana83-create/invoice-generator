@@ -1,7 +1,14 @@
 import Link from "next/link";
+import { InvoiceStatus } from "@prisma/client";
 import { requireUserId } from "@/lib/auth/user";
 import { formatCurrency } from "@/lib/invoices/calculations";
 import { prisma } from "@/lib/prisma";
+
+const statusBadgeStyles: Record<InvoiceStatus, string> = {
+  draft: "bg-slate-100 text-slate-700",
+  sent: "bg-amber-100 text-amber-800",
+  paid: "bg-emerald-100 text-emerald-800",
+};
 
 export default async function InvoicesPage() {
   const userId = await requireUserId();
@@ -50,13 +57,17 @@ export default async function InvoicesPage() {
               <tr key={invoice.id}>
                 <td className="px-4 py-3 font-medium text-slate-900">{invoice.invoiceNo}</td>
                 <td className="px-4 py-3 text-slate-700">{invoice.client.name}</td>
-                <td className="px-4 py-3 capitalize text-slate-700">{invoice.status}</td>
+                <td className="px-4 py-3 text-slate-700">
+                  <span
+                    className={`inline-flex rounded-full px-2.5 py-1 text-xs font-semibold uppercase tracking-wide ${statusBadgeStyles[invoice.status]}`}
+                  >
+                    {invoice.status}
+                  </span>
+                </td>
                 <td className="px-4 py-3 text-slate-700">
                   {new Intl.DateTimeFormat("en-US").format(invoice.issueDate)}
                 </td>
-                <td className="px-4 py-3 text-slate-900">
-                  {formatCurrency(Number(invoice.totalAmount))}
-                </td>
+                <td className="px-4 py-3 text-slate-900">{formatCurrency(Number(invoice.totalAmount))}</td>
                 <td className="px-4 py-3">
                   <Link href={`/dashboard/invoices/${invoice.id}`} className="text-indigo-600 hover:text-indigo-500">
                     Open

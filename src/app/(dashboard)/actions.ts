@@ -1,0 +1,208 @@
+"use server";
+
+import { InvoiceStatus } from "@prisma/client";
+import { revalidatePath } from "next/cache";
+import { redirect } from "next/navigation";
+import { z } from "zod";
+import { requireUserId } from "@/lib/auth/user";
+import { prisma } from "@/lib/prisma";
+import { calculateInvoiceTotals } from "@/lib/invoices/calculations";
+
+const clientSchema = z.object({
+  name: z.string().trim().min(2, "Client name is required.").max(120),
+  email: z.string().trim().email("Please provide a valid email.").optional().or(z.literal("")),
+  phone: z.string().trim().max(50).optional().or(z.literal("")),
+  address: z.string().trim().max(500).optional().or(z.literal("")),
+});
+
+const companySchema = z.object({
+  name: z.string().trim().min(2, "Company name is required.").max(120),
+  email: z.string().trim().email("Please provide a valid email.").optional().or(z.literal("")),
+  phone: z.string().trim().max(50).optional().or(z.literal("")),
+  address: z.string().trim().max(500).optional().or(z.literal("")),
+});
+
+const itemSchema = z.object({
+  description: z.string().trim().min(1, "Item description is required.").max(300),
+  quantity: z.number().positive("Quantity must be greater than 0."),
+  unitPrice: z.number().nonnegative("Unit price cannot be negative."),
+});
+
+const invoiceSchema = z.object({
+  clientId: z.string().trim().min(1, "Client is required."),
+  issueDate: z.string().min(1),
+  dueDate: z.string().min(1),
+  taxRate: z.coerce.number().min(0).max(100),
+  notes: z.string().trim().max(2000).optional().or(z.literal("")),
+  status: z.nativeEnum(InvoiceStatus),
+  items: z.array(itemSchema).min(1, "At least one invoice item is required."),
+});
+
+export async function createClientAction(formData: FormData): Promise<void> {
+  const userId = await requireUserId();
+  const parsed = clientSchema.safeParse({
+    name: formData.get("name"),
+    email: formData.get("email"),
+    phone: formData.get("phone"),
+    address: formData.get("address"),
+  });
+
+  if (!parsed.success) {
+    throw new Error(parsed.error.errors[0]?.message ?? "Invalid client data.");
+  }
+
+  await prisma.client.create({
+    data: {
+      userId,
+      ...parsed.data,
+      email: parsed.data.email || null,
+      phone: parsed.data.phone || null,
+      address: parsed.data.address || null,
+    },
+  });
+
+  revalidatePath("/dashboard/clients");
+  revalidatePath("/dashboard/invoices/new");
+  redirect("/dashboard/clients");
+}
+
+export async function upsertCompanyAction(formData: FormData): Promise<void> {
+  const userId = await requireUserId();
+  const parsed = companySchema.safeParse({
+    name: formData.get("name"),
+    email: formData.get("email"),
+    phone: formData.get("phone"),
+    address: formData.get("address"),
+  });
+
+  if (!parsed.success) {
+    throw new Error(parsed.error.errors[0]?.message ?? "Invalid company data.");
+  }
+
+  await prisma.company.upsert({
+    where: { userId },
+    update: {
+      ...parsed.data,
+      email: parsed.data.email || null,
+      phone: parsed.data.phone || null,
+      address: parsed.data.address || null,
+    },
+    create: {
+      userId,
+      ...parsed.data,
+      email: parsed.data.email || null,
+      phone: parsed.data.phone || null,
+      address: parsed.data.address || null,
+    },
+  });
+
+  revalidatePath("/dashboard/settings/company");
+  redirect("/dashboard/settings/company");
+}
+
+function createInvoiceNumber(index: number): string {
+  const padded = `${index}`.padStart(5, "0");
+  return `INV-${padded}`;
+}
+
+export async function createInvoiceAction(formData: FormData): Promise<void> {
+  const userId = await requireUserId();
+
+  const rawItems = formData.get("items");
+  let items: unknown = [];
+  try {
+    items = typeof rawItems === "string" ? JSON.parse(rawItems) : [];
+  } catch {
+    throw new Error("Invalid invoice items payload.");
+  }
+
+  const parsed = invoiceSchema.safeParse({
+    clientId: formData.get("clientId"),
+    issueDate: formData.get("issueDate"),
+    dueDate: formData.get("dueDate"),
+    taxRate: formData.get("taxRate"),
+    notes: formData.get("notes"),
+    status: formData.get("status"),
+    items,
+  });
+
+  if (!parsed.success) {
+    throw new Error(parsed.error.errors[0]?.message ?? "Invalid invoice data.");
+  }
+
+  const client = await prisma.client.findFirst({
+    where: {
+      id: parsed.data.clientId,
+      userId,
+    },
+    select: { id: true },
+  });
+
+  if (!client) {
+    throw new Error("Selected client was not found.");
+  }
+
+  const totals = calculateInvoiceTotals(parsed.data.items, parsed.data.taxRate);
+
+  const invoiceCount = await prisma.invoice.count({ where: { userId } });
+  const invoiceNo = createInvoiceNumber(invoiceCount + 1);
+
+  const issueDate = new Date(parsed.data.issueDate);
+  const dueDate = new Date(parsed.data.dueDate);
+
+  const invoice = await prisma.invoice.create({
+    data: {
+      userId,
+      clientId: parsed.data.clientId,
+      invoiceNo,
+      issueDate,
+      dueDate,
+      notes: parsed.data.notes || null,
+      taxRate: parsed.data.taxRate.toFixed(2),
+      subtotal: totals.subtotal.toFixed(2),
+      taxAmount: totals.taxAmount.toFixed(2),
+      totalAmount: totals.totalAmount.toFixed(2),
+      status: parsed.data.status,
+      items: {
+        createMany: {
+          data: totals.normalizedItems.map((item) => ({
+            description: item.description,
+            quantity: item.quantity.toFixed(2),
+            unitPrice: item.unitPrice.toFixed(2),
+            lineTotal: item.lineTotal.toFixed(2),
+          })),
+        },
+      },
+    },
+    select: { id: true },
+  });
+
+  revalidatePath("/dashboard/invoices");
+  redirect(`/dashboard/invoices/${invoice.id}`);
+}
+
+export async function updateInvoiceStatusAction(formData: FormData): Promise<void> {
+  const userId = await requireUserId();
+  const invoiceId = formData.get("invoiceId");
+  const status = formData.get("status");
+
+  if (typeof invoiceId !== "string" || !invoiceId) {
+    throw new Error("Invoice id is required.");
+  }
+
+  if (status !== InvoiceStatus.draft && status !== InvoiceStatus.sent && status !== InvoiceStatus.paid) {
+    throw new Error("Invalid status.");
+  }
+
+  await prisma.invoice.updateMany({
+    where: {
+      id: invoiceId,
+      userId,
+    },
+    data: { status },
+  });
+
+  revalidatePath(`/dashboard/invoices/${invoiceId}`);
+  revalidatePath("/dashboard/invoices");
+  redirect(`/dashboard/invoices/${invoiceId}`);
+}

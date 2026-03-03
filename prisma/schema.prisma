@@ -11,6 +11,7 @@ enum InvoiceStatus {
   draft
   sent
   paid
+  overdue
 }
 
 model User {
@@ -64,23 +65,26 @@ model Client {
 }
 
 model Invoice {
-  id          String        @id @default(cuid())
-  userId      String
-  user        User          @relation(fields: [userId], references: [id], onDelete: Cascade)
-  clientId    String
-  client      Client        @relation(fields: [clientId], references: [id], onDelete: Restrict)
-  invoiceNo   String
-  issueDate   DateTime
-  dueDate     DateTime
-  notes       String?
-  taxRate     Decimal       @db.Decimal(5, 2)
-  subtotal    Decimal       @db.Decimal(12, 2)
-  taxAmount   Decimal       @db.Decimal(12, 2)
-  totalAmount Decimal       @db.Decimal(12, 2)
-  status      InvoiceStatus @default(draft)
-  items       InvoiceItem[]
-  createdAt   DateTime      @default(now())
-  updatedAt   DateTime      @updatedAt
+  id              String        @id @default(cuid())
+  userId          String
+  user            User          @relation(fields: [userId], references: [id], onDelete: Cascade)
+  clientId        String
+  client          Client        @relation(fields: [clientId], references: [id], onDelete: Restrict)
+  invoiceNo       String
+  issueDate       DateTime
+  dueDate         DateTime
+  notes           String?
+  taxRate         Decimal       @db.Decimal(5, 2)
+  subtotal        Decimal       @db.Decimal(12, 2)
+  taxAmount       Decimal       @db.Decimal(12, 2)
+  totalAmount     Decimal       @db.Decimal(12, 2)
+  status          InvoiceStatus @default(draft)
+  paymentId       String?
+  paymentDate     DateTime?
+  paymentProvider String?       @default("stripe")
+  items           InvoiceItem[]
+  createdAt       DateTime      @default(now())
+  updatedAt       DateTime      @updatedAt
 
   @@unique([userId, invoiceNo])
   @@index([userId, createdAt])

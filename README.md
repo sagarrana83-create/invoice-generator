@@ -8,9 +8,10 @@ Next.js App Router SaaS for authenticated invoice management.
 - Client management
 - Invoice creation with multiple line items
 - Automatic subtotal, tax, and total calculation
-- Invoice lifecycle statuses: `draft`, `sent`, `paid`
+- Invoice lifecycle statuses: `draft`, `sent`, `paid`, `overdue`
 - Server-side invoice PDF export
 - Invoice delivery via email with PDF attachment
+- Stripe Checkout payment flow + secure webhook-based status updates
 
 ## Core routes
 - `/login`
@@ -22,6 +23,7 @@ Next.js App Router SaaS for authenticated invoice management.
 - `/dashboard/invoices/[id]/pdf`
 - `/dashboard/clients`
 - `/dashboard/settings/company`
+- `/api/stripe/webhook`
 
 ## Required environment variables
 - `DATABASE_URL`
@@ -31,6 +33,9 @@ Next.js App Router SaaS for authenticated invoice management.
 - `SMTP_USER`
 - `SMTP_PASS`
 - `SMTP_FROM` (optional, falls back to `SMTP_USER`)
+- `STRIPE_SECRET_KEY`
+- `STRIPE_WEBHOOK_SECRET`
+- `APP_URL` (recommended for Stripe redirect URLs)
 
 ## Tech
 - Next.js App Router + TypeScript strict

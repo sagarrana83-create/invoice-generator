@@ -1,22 +1,20 @@
 import { InvoiceStatus } from "@prisma/client";
 import { notFound } from "next/navigation";
 import {
+  createStripeCheckoutSessionAction,
   downloadInvoicePdfAction,
   sendInvoiceAction,
   updateInvoiceStatusAction,
 } from "@/app/(dashboard)/actions";
+import { PayNowButton } from "@/components/invoices/pay-now-button";
 import { requireUserId } from "@/lib/auth/user";
 import { formatCurrency } from "@/lib/invoices/calculations";
 import { getOwnedInvoiceForUser } from "@/lib/invoices/invoice-data";
-
-const statusBadgeStyles: Record<InvoiceStatus, string> = {
-  draft: "bg-slate-100 text-slate-700",
-  sent: "bg-amber-100 text-amber-800",
-  paid: "bg-emerald-100 text-emerald-800",
-};
+import { invoiceStatusBadgeStyles, markOverdueInvoicesForUser } from "@/lib/invoices/status";
 
 export default async function InvoiceDetailsPage({ params }: { params: { id: string } }) {
   const userId = await requireUserId();
+  await markOverdueInvoicesForUser(userId);
 
   const invoice = await getOwnedInvoiceForUser(userId, params.id);
 
@@ -24,7 +22,8 @@ export default async function InvoiceDetailsPage({ params }: { params: { id: str
     notFound();
   }
 
-  const statuses: InvoiceStatus[] = [InvoiceStatus.draft, InvoiceStatus.sent, InvoiceStatus.paid];
+  const manualStatuses: InvoiceStatus[] = [InvoiceStatus.draft, InvoiceStatus.sent, InvoiceStatus.paid];
+  const canPay = invoice.status === InvoiceStatus.draft || invoice.status === InvoiceStatus.sent;
 
   return (
     <section className="space-y-6">
@@ -37,7 +36,7 @@ export default async function InvoiceDetailsPage({ params }: { params: { id: str
               {invoice.client.name} • Due {new Intl.DateTimeFormat("en-US").format(invoice.dueDate)}
             </p>
             <span
-              className={`mt-3 inline-flex rounded-full px-3 py-1 text-xs font-semibold uppercase tracking-wide ${statusBadgeStyles[invoice.status]}`}
+              className={`mt-3 inline-flex rounded-full px-3 py-1 text-xs font-semibold uppercase tracking-wide ${invoiceStatusBadgeStyles[invoice.status]}`}
             >
               {invoice.status}
             </span>
@@ -64,12 +63,14 @@ export default async function InvoiceDetailsPage({ params }: { params: { id: str
                   Send Invoice
                 </button>
               </form>
+
+              {canPay ? <PayNowButton invoiceId={invoice.id} action={createStripeCheckoutSessionAction} /> : null}
             </div>
 
             <div>
               <p className="mb-2 text-sm font-medium text-slate-700">Set status</p>
               <div className="flex flex-wrap gap-2">
-                {statuses.map((status) => (
+                {manualStatuses.map((status) => (
                   <form key={status} action={updateInvoiceStatusAction}>
                     <input type="hidden" name="invoiceId" value={invoice.id} />
                     <input type="hidden" name="status" value={status} />
@@ -124,6 +125,12 @@ export default async function InvoiceDetailsPage({ params }: { params: { id: str
           <span>Total</span>
           <span>{formatCurrency(Number(invoice.totalAmount))}</span>
         </div>
+
+        {invoice.paymentDate ? (
+          <div className="mt-4 rounded-lg bg-emerald-50 px-3 py-2 text-xs text-emerald-700">
+            Paid on {new Intl.DateTimeFormat("en-US", { dateStyle: "medium" }).format(invoice.paymentDate)}
+          </div>
+        ) : null}
       </div>
     </section>
   );

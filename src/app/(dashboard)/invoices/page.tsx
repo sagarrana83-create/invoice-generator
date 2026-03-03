@@ -1,17 +1,12 @@
 import Link from "next/link";
-import { InvoiceStatus } from "@prisma/client";
 import { requireUserId } from "@/lib/auth/user";
 import { formatCurrency } from "@/lib/invoices/calculations";
+import { invoiceStatusBadgeStyles, markOverdueInvoicesForUser } from "@/lib/invoices/status";
 import { prisma } from "@/lib/prisma";
-
-const statusBadgeStyles: Record<InvoiceStatus, string> = {
-  draft: "bg-slate-100 text-slate-700",
-  sent: "bg-amber-100 text-amber-800",
-  paid: "bg-emerald-100 text-emerald-800",
-};
 
 export default async function InvoicesPage() {
   const userId = await requireUserId();
+  await markOverdueInvoicesForUser(userId);
 
   const invoices = await prisma.invoice.findMany({
     where: { userId },
@@ -59,7 +54,7 @@ export default async function InvoicesPage() {
                 <td className="px-4 py-3 text-slate-700">{invoice.client.name}</td>
                 <td className="px-4 py-3 text-slate-700">
                   <span
-                    className={`inline-flex rounded-full px-2.5 py-1 text-xs font-semibold uppercase tracking-wide ${statusBadgeStyles[invoice.status]}`}
+                    className={`inline-flex rounded-full px-2.5 py-1 text-xs font-semibold uppercase tracking-wide ${invoiceStatusBadgeStyles[invoice.status]}`}
                   >
                     {invoice.status}
                   </span>

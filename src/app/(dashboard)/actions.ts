@@ -9,7 +9,9 @@ import { requireUserId } from "@/lib/auth/user";
 import { calculateInvoiceTotals } from "@/lib/invoices/calculations";
 import { getOwnedInvoiceWithCompany } from "@/lib/invoices/invoice-data";
 import { generateInvoicePdfBuffer } from "@/lib/invoices/pdf";
+import { markOverdueInvoicesForUser } from "@/lib/invoices/status";
 import { prisma } from "@/lib/prisma";
+import { getAppBaseUrl, getStripeClient } from "@/lib/stripe";
 
 const clientSchema = z.object({
   name: z.string().trim().min(2, "Client name is required.").max(120),
@@ -193,7 +195,12 @@ export async function updateInvoiceStatusAction(formData: FormData): Promise<voi
     throw new Error("Invoice id is required.");
   }
 
-  if (status !== InvoiceStatus.draft && status !== InvoiceStatus.sent && status !== InvoiceStatus.paid) {
+  if (
+    status !== InvoiceStatus.draft &&
+    status !== InvoiceStatus.sent &&
+    status !== InvoiceStatus.paid &&
+    status !== InvoiceStatus.overdue
+  ) {
     throw new Error("Invalid status.");
   }
 
@@ -264,4 +271,73 @@ export async function sendInvoiceAction(formData: FormData): Promise<void> {
   revalidatePath(`/dashboard/invoices/${invoiceId}`);
   revalidatePath("/dashboard/invoices");
   redirect(`/dashboard/invoices/${invoiceId}`);
+}
+
+export async function createStripeCheckoutSessionAction(formData: FormData): Promise<void> {
+  const userId = await requireUserId();
+  await markOverdueInvoicesForUser(userId);
+
+  const invoiceId = formData.get("invoiceId");
+
+  if (typeof invoiceId !== "string" || !invoiceId) {
+    throw new Error("Invoice id is required.");
+  }
+
+  const invoice = await prisma.invoice.findFirst({
+    where: {
+      id: invoiceId,
+      userId,
+    },
+    select: {
+      id: true,
+      invoiceNo: true,
+      totalAmount: true,
+      status: true,
+    },
+  });
+
+  if (!invoice) {
+    throw new Error("Invoice not found.");
+  }
+
+  if (invoice.status !== InvoiceStatus.draft && invoice.status !== InvoiceStatus.sent) {
+    throw new Error("Only draft or sent invoices can be paid.");
+  }
+
+  const amountInCents = Math.round(Number(invoice.totalAmount) * 100);
+
+  if (amountInCents <= 0) {
+    throw new Error("Invoice total must be greater than zero.");
+  }
+
+  const stripe = getStripeClient();
+  const baseUrl = getAppBaseUrl();
+
+  const session = await stripe.checkout.sessions.create({
+    mode: "payment",
+    success_url: `${baseUrl}/dashboard/invoices/${invoice.id}?payment=success`,
+    cancel_url: `${baseUrl}/dashboard/invoices/${invoice.id}?payment=cancelled`,
+    metadata: {
+      invoiceId: invoice.id,
+      userId,
+    },
+    line_items: [
+      {
+        quantity: 1,
+        price_data: {
+          currency: "usd",
+          unit_amount: amountInCents,
+          product_data: {
+            name: `Payment for ${invoice.invoiceNo}`,
+          },
+        },
+      },
+    ],
+  });
+
+  if (!session.url) {
+    throw new Error("Unable to create Stripe checkout session.");
+  }
+
+  redirect(session.url);
 }

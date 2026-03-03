@@ -12,7 +12,12 @@ import { formatCurrency } from "@/lib/invoices/calculations";
 import { getOwnedInvoiceForUser } from "@/lib/invoices/invoice-data";
 import { invoiceStatusBadgeStyles, markOverdueInvoicesForUser } from "@/lib/invoices/status";
 
-export default async function InvoiceDetailsPage({ params }: { params: { id: string } }) {
+type InvoiceDetailProps = {
+  params: { id: string };
+  searchParams: { error?: string; success?: string; payment?: string };
+};
+
+export default async function InvoiceDetailsPage({ params, searchParams }: InvoiceDetailProps) {
   const userId = await requireUserId();
   await markOverdueInvoicesForUser(userId);
 
@@ -27,6 +32,30 @@ export default async function InvoiceDetailsPage({ params }: { params: { id: str
 
   return (
     <section className="space-y-6">
+      {searchParams.success ? (
+        <div className="rounded-lg border border-emerald-200 bg-emerald-50 px-4 py-3 text-sm text-emerald-700">
+          {searchParams.success}
+        </div>
+      ) : null}
+
+      {searchParams.error ? (
+        <div className="rounded-lg border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700">
+          {searchParams.error}
+        </div>
+      ) : null}
+
+      {searchParams.payment === "success" ? (
+        <div className="rounded-lg border border-emerald-200 bg-emerald-50 px-4 py-3 text-sm text-emerald-700">
+          Payment completed. We are syncing your invoice status now.
+        </div>
+      ) : null}
+
+      {searchParams.payment === "cancelled" ? (
+        <div className="rounded-lg border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-700">
+          Payment was cancelled. You can retry whenever you are ready.
+        </div>
+      ) : null}
+
       <div className="rounded-xl border border-slate-200 bg-white p-6 shadow-sm">
         <div className="flex flex-wrap items-start justify-between gap-4">
           <div>

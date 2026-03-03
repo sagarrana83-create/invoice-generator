@@ -10,19 +10,36 @@ export const invoiceStatusBadgeStyles: Record<InvoiceStatus, string> = {
   overdue: "bg-red-100 text-red-700",
 };
 
-export async function markOverdueInvoicesForUser(userId: string): Promise<void> {
-  await prisma.invoice.updateMany({
+const overdueWhere = {
+  dueDate: {
+    lt: new Date(),
+  },
+  status: {
+    in: [InvoiceStatus.draft, InvoiceStatus.sent] as InvoiceStatus[],
+  },
+};
+
+export async function markOverdueInvoicesForUser(userId: string): Promise<number> {
+  const result = await prisma.invoice.updateMany({
     where: {
       userId,
-      dueDate: {
-        lt: new Date(),
-      },
-      status: {
-        in: [InvoiceStatus.draft, InvoiceStatus.sent],
-      },
+      ...overdueWhere,
     },
     data: {
       status: InvoiceStatus.overdue,
     },
   });
+
+  return result.count;
+}
+
+export async function runOverdueSweep(): Promise<number> {
+  const result = await prisma.invoice.updateMany({
+    where: overdueWhere,
+    data: {
+      status: InvoiceStatus.overdue,
+    },
+  });
+
+  return result.count;
 }

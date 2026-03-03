@@ -4,8 +4,9 @@ import { InvoiceStatus } from "@prisma/client";
 import { revalidatePath } from "next/cache";
 import { redirect } from "next/navigation";
 import { z } from "zod";
-import { sendInvoiceEmail } from "@/lib/email/invoice-email";
 import { requireUserId } from "@/lib/auth/user";
+import { sendInvoiceEmail } from "@/lib/email/invoice-email";
+import { AppError, getErrorMessage, logServerError } from "@/lib/errors";
 import { calculateInvoiceTotals } from "@/lib/invoices/calculations";
 import { getOwnedInvoiceWithCompany } from "@/lib/invoices/invoice-data";
 import { generateInvoicePdfBuffer } from "@/lib/invoices/pdf";
@@ -53,7 +54,7 @@ export async function createClientAction(formData: FormData): Promise<void> {
   });
 
   if (!parsed.success) {
-    throw new Error(parsed.error.errors[0]?.message ?? "Invalid client data.");
+    throw new AppError(parsed.error.errors[0]?.message ?? "Invalid client data.");
   }
 
   await prisma.client.create({
@@ -81,7 +82,7 @@ export async function upsertCompanyAction(formData: FormData): Promise<void> {
   });
 
   if (!parsed.success) {
-    throw new Error(parsed.error.errors[0]?.message ?? "Invalid company data.");
+    throw new AppError(parsed.error.errors[0]?.message ?? "Invalid company data.");
   }
 
   await prisma.company.upsert({
@@ -118,7 +119,7 @@ export async function createInvoiceAction(formData: FormData): Promise<void> {
   try {
     items = typeof rawItems === "string" ? JSON.parse(rawItems) : [];
   } catch {
-    throw new Error("Invalid invoice items payload.");
+    throw new AppError("Invalid invoice items payload.");
   }
 
   const parsed = invoiceSchema.safeParse({
@@ -132,7 +133,7 @@ export async function createInvoiceAction(formData: FormData): Promise<void> {
   });
 
   if (!parsed.success) {
-    throw new Error(parsed.error.errors[0]?.message ?? "Invalid invoice data.");
+    throw new AppError(parsed.error.errors[0]?.message ?? "Invalid invoice data.");
   }
 
   const client = await prisma.client.findFirst({
@@ -144,24 +145,20 @@ export async function createInvoiceAction(formData: FormData): Promise<void> {
   });
 
   if (!client) {
-    throw new Error("Selected client was not found.");
+    throw new AppError("Selected client was not found.");
   }
 
   const totals = calculateInvoiceTotals(parsed.data.items, parsed.data.taxRate);
-
   const invoiceCount = await prisma.invoice.count({ where: { userId } });
   const invoiceNo = createInvoiceNumber(invoiceCount + 1);
-
-  const issueDate = new Date(parsed.data.issueDate);
-  const dueDate = new Date(parsed.data.dueDate);
 
   const invoice = await prisma.invoice.create({
     data: {
       userId,
       clientId: parsed.data.clientId,
       invoiceNo,
-      issueDate,
-      dueDate,
+      issueDate: new Date(parsed.data.issueDate),
+      dueDate: new Date(parsed.data.dueDate),
       notes: parsed.data.notes || null,
       taxRate: parsed.data.taxRate.toFixed(2),
       subtotal: totals.subtotal.toFixed(2),
@@ -192,16 +189,11 @@ export async function updateInvoiceStatusAction(formData: FormData): Promise<voi
   const status = formData.get("status");
 
   if (typeof invoiceId !== "string" || !invoiceId) {
-    throw new Error("Invoice id is required.");
+    throw new AppError("Invoice id is required.");
   }
 
-  if (
-    status !== InvoiceStatus.draft &&
-    status !== InvoiceStatus.sent &&
-    status !== InvoiceStatus.paid &&
-    status !== InvoiceStatus.overdue
-  ) {
-    throw new Error("Invalid status.");
+  if (status !== InvoiceStatus.draft && status !== InvoiceStatus.sent && status !== InvoiceStatus.paid) {
+    throw new AppError("Invalid status.");
   }
 
   await prisma.invoice.updateMany({
@@ -222,7 +214,7 @@ export async function downloadInvoicePdfAction(formData: FormData): Promise<void
   const invoiceId = formData.get("invoiceId");
 
   if (typeof invoiceId !== "string" || !invoiceId) {
-    throw new Error("Invoice id is required.");
+    throw new AppError("Invoice id is required.");
   }
 
   const invoice = await prisma.invoice.findFirst({
@@ -231,7 +223,7 @@ export async function downloadInvoicePdfAction(formData: FormData): Promise<void
   });
 
   if (!invoice) {
-    throw new Error("Invoice not found.");
+    throw new AppError("Invoice not found.");
   }
 
   redirect(`/dashboard/invoices/${invoiceId}/pdf`);
@@ -242,35 +234,41 @@ export async function sendInvoiceAction(formData: FormData): Promise<void> {
   const invoiceId = formData.get("invoiceId");
 
   if (typeof invoiceId !== "string" || !invoiceId) {
-    throw new Error("Invoice id is required.");
+    throw new AppError("Invoice id is required.");
   }
 
   const { invoice, company } = await getOwnedInvoiceWithCompany(userId, invoiceId);
 
   if (!invoice) {
-    throw new Error("Invoice not found.");
+    throw new AppError("Invoice not found.");
   }
 
   if (!invoice.client.email) {
-    throw new Error("Client email is required before sending invoice.");
+    redirect(`/dashboard/invoices/${invoiceId}?error=${encodeURIComponent("Client email is missing.")}`);
   }
 
-  const pdfBuffer = await generateInvoicePdfBuffer(invoice, company);
+  try {
+    const pdfBuffer = await generateInvoicePdfBuffer(invoice, company);
 
-  await sendInvoiceEmail({
-    to: invoice.client.email,
-    invoiceNumber: invoice.invoiceNo,
-    pdfBuffer,
-  });
+    await sendInvoiceEmail({
+      to: invoice.client.email,
+      invoiceNumber: invoice.invoiceNo,
+      pdfBuffer,
+    });
 
-  await prisma.invoice.update({
-    where: { id: invoice.id },
-    data: { status: InvoiceStatus.sent },
-  });
+    await prisma.invoice.update({
+      where: { id: invoice.id },
+      data: { status: InvoiceStatus.sent },
+    });
 
-  revalidatePath(`/dashboard/invoices/${invoiceId}`);
-  revalidatePath("/dashboard/invoices");
-  redirect(`/dashboard/invoices/${invoiceId}`);
+    revalidatePath(`/dashboard/invoices/${invoiceId}`);
+    revalidatePath("/dashboard/invoices");
+    redirect(`/dashboard/invoices/${invoiceId}?success=${encodeURIComponent("Invoice emailed successfully.")}`);
+  } catch (error) {
+    logServerError("send-invoice", error);
+    const message = getErrorMessage(error, "We could not send this invoice email right now.");
+    redirect(`/dashboard/invoices/${invoiceId}?error=${encodeURIComponent(message)}`);
+  }
 }
 
 export async function createStripeCheckoutSessionAction(formData: FormData): Promise<void> {
@@ -280,64 +278,74 @@ export async function createStripeCheckoutSessionAction(formData: FormData): Pro
   const invoiceId = formData.get("invoiceId");
 
   if (typeof invoiceId !== "string" || !invoiceId) {
-    throw new Error("Invoice id is required.");
+    throw new AppError("Invoice id is required.");
   }
 
   const invoice = await prisma.invoice.findFirst({
     where: {
       id: invoiceId,
       userId,
+      paymentId: null,
+      status: {
+        in: [InvoiceStatus.draft, InvoiceStatus.sent],
+      },
     },
     select: {
       id: true,
       invoiceNo: true,
       totalAmount: true,
       status: true,
+      updatedAt: true,
     },
   });
 
   if (!invoice) {
-    throw new Error("Invoice not found.");
-  }
-
-  if (invoice.status !== InvoiceStatus.draft && invoice.status !== InvoiceStatus.sent) {
-    throw new Error("Only draft or sent invoices can be paid.");
+    throw new AppError("Invoice is unavailable for payment.");
   }
 
   const amountInCents = Math.round(Number(invoice.totalAmount) * 100);
 
   if (amountInCents <= 0) {
-    throw new Error("Invoice total must be greater than zero.");
+    throw new AppError("Invoice total must be greater than zero.");
   }
 
-  const stripe = getStripeClient();
-  const baseUrl = getAppBaseUrl();
+  try {
+    const stripe = getStripeClient();
+    const baseUrl = getAppBaseUrl();
 
-  const session = await stripe.checkout.sessions.create({
-    mode: "payment",
-    success_url: `${baseUrl}/dashboard/invoices/${invoice.id}?payment=success`,
-    cancel_url: `${baseUrl}/dashboard/invoices/${invoice.id}?payment=cancelled`,
-    metadata: {
-      invoiceId: invoice.id,
-      userId,
-    },
-    line_items: [
+    const session = await stripe.checkout.sessions.create(
       {
-        quantity: 1,
-        price_data: {
-          currency: "usd",
-          unit_amount: amountInCents,
-          product_data: {
-            name: `Payment for ${invoice.invoiceNo}`,
-          },
+        mode: "payment",
+        success_url: `${baseUrl}/dashboard/invoices/${invoice.id}?payment=success`,
+        cancel_url: `${baseUrl}/dashboard/invoices/${invoice.id}?payment=cancelled`,
+        metadata: {
+          invoiceId: invoice.id,
+          userId,
         },
+        line_items: [
+          {
+            quantity: 1,
+            price_data: {
+              currency: "usd",
+              unit_amount: amountInCents,
+              product_data: {
+                name: `Payment for ${invoice.invoiceNo}`,
+              },
+            },
+          },
+        ],
       },
-    ],
-  });
+      { idempotencyKey: `invoice-${invoice.id}-${invoice.updatedAt.getTime()}` },
+    );
 
-  if (!session.url) {
-    throw new Error("Unable to create Stripe checkout session.");
+    if (!session.url) {
+      throw new AppError("Unable to create Stripe checkout session.");
+    }
+
+    redirect(session.url);
+  } catch (error) {
+    logServerError("create-stripe-session", error);
+    const message = getErrorMessage(error, "Unable to start payment. Please try again.");
+    redirect(`/dashboard/invoices/${invoice.id}?error=${encodeURIComponent(message)}`);
   }
-
-  redirect(session.url);
 }

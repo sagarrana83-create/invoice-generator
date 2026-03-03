@@ -1,6 +1,8 @@
 import "server-only";
 
 import Stripe from "stripe";
+import { AppError } from "@/lib/errors";
+import { getEnv } from "@/lib/env";
 
 let stripeClient: Stripe | null = null;
 
@@ -9,16 +11,17 @@ export function getStripeClient(): Stripe {
     return stripeClient;
   }
 
-  const secretKey = process.env.STRIPE_SECRET_KEY;
+  const { STRIPE_SECRET_KEY } = getEnv();
 
-  if (!secretKey) {
-    throw new Error("STRIPE_SECRET_KEY is not configured.");
+  if (!STRIPE_SECRET_KEY) {
+    throw new AppError("Stripe is not configured.", "STRIPE_NOT_CONFIGURED");
   }
 
-  stripeClient = new Stripe(secretKey);
+  stripeClient = new Stripe(STRIPE_SECRET_KEY);
   return stripeClient;
 }
 
 export function getAppBaseUrl(): string {
-  return process.env.APP_URL ?? process.env.NEXT_PUBLIC_APP_URL ?? "http://localhost:3000";
+  const { APP_URL, NEXT_PUBLIC_APP_URL } = getEnv();
+  return APP_URL ?? NEXT_PUBLIC_APP_URL ?? "http://localhost:3000";
 }

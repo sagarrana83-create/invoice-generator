@@ -1,6 +1,8 @@
 import "server-only";
 
 import nodemailer from "nodemailer";
+import { AppError } from "@/lib/errors";
+import { getEnv } from "@/lib/env";
 
 type SendInvoiceEmailParams = {
   to: string;
@@ -9,28 +11,26 @@ type SendInvoiceEmailParams = {
 };
 
 function getTransporter() {
-  const host = process.env.SMTP_HOST;
-  const port = process.env.SMTP_PORT;
-  const user = process.env.SMTP_USER;
-  const pass = process.env.SMTP_PASS;
+  const { SMTP_HOST, SMTP_PASS, SMTP_PORT, SMTP_USER } = getEnv();
 
-  if (!host || !port || !user || !pass) {
-    throw new Error("SMTP configuration is missing.");
+  if (!SMTP_HOST || !SMTP_PORT || !SMTP_USER || !SMTP_PASS) {
+    throw new AppError("Email delivery is not configured.", "SMTP_NOT_CONFIGURED");
   }
 
   return nodemailer.createTransport({
-    host,
-    port: Number(port),
-    secure: Number(port) === 465,
-    auth: { user, pass },
+    host: SMTP_HOST,
+    port: Number(SMTP_PORT),
+    secure: Number(SMTP_PORT) === 465,
+    auth: { user: SMTP_USER, pass: SMTP_PASS },
   });
 }
 
 export async function sendInvoiceEmail({ to, invoiceNumber, pdfBuffer }: SendInvoiceEmailParams) {
-  const fromEmail = process.env.SMTP_FROM ?? process.env.SMTP_USER;
+  const { SMTP_FROM, SMTP_USER } = getEnv();
+  const fromEmail = SMTP_FROM ?? SMTP_USER;
 
   if (!fromEmail) {
-    throw new Error("SMTP_FROM or SMTP_USER must be configured.");
+    throw new AppError("Email sender is not configured.", "SMTP_FROM_MISSING");
   }
 
   const transporter = getTransporter();
